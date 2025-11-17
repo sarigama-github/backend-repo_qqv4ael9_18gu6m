@@ -12,7 +12,7 @@ Model name is converted to lowercase for the collection name:
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 
 # Example schemas (kept for reference)
 
@@ -59,3 +59,19 @@ class GameResult(BaseModel):
     payout: int = Field(..., description="Credits won (can be negative for loss)")
     balance_after: int = Field(..., ge=0)
     details: Dict[str, Any] = Field(default_factory=dict)
+
+class BlackjackHand(BaseModel):
+    """
+    Blackjack hands (active sessions)
+    Collection name: "blackjackhand"
+    """
+    username: str
+    bet: int = Field(..., ge=1, le=1000)
+    player_cards: List[str]
+    dealer_cards: List[str]
+    shoe: List[str] = Field(default_factory=list)
+    status: Literal["player_turn", "dealer_turn", "resolved"] = "player_turn"
+    outcome: Optional[Literal["win", "lose", "push", "blackjack", "bust"]] = None
+    payout: Optional[int] = None
+    can_double: bool = True
+    can_split: bool = False  # reserved for future

@@ -1,12 +1,22 @@
 INFO:     Will watch for changes in these directories: ['/home/workspace']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [198] using StatReload
-INFO:     Started server process [200]
+INFO:     Started reloader process [282] using StatReload
+INFO:     Started server process [284]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     172.20.0.1:58740 - "HEAD / HTTP/1.1" 405 Method Not Allowed
-INFO:     172.20.0.1:58750 - "GET /api/player/jaro HTTP/1.1" 200 OK
-INFO:     172.20.0.1:58750 - "GET /api/player/jaro HTTP/1.1" 200 OK
-INFO:     172.20.0.1:58750 - "GET /api/player/jaro HTTP/1.1" 200 OK
-INFO:     172.20.0.1:58764 - "GET /api/player/jaro HTTP/1.1" 200 OK
-INFO:     172.20.0.1:43002 - "POST /api/blackjack/play HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34262 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+INFO:     172.20.0.1:34248 - "GET /api/player/jaro HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34248 - "GET /api/player/jaro HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34270 - "GET /api/player/jaro HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34270 - "GET /api/player/jaro HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34270 - "OPTIONS /api/blackjack/start HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34270 - "POST /api/blackjack/start HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34270 - "OPTIONS /api/blackjack/stand HTTP/1.1" 200 OK
+INFO:     172.20.0.1:34270 - "POST /api/blackjack/stand HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "POST /api/blackjack/start HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "POST /api/blackjack/stand HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "POST /api/blackjack/start HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "OPTIONS /api/blackjack/hit HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "POST /api/blackjack/hit HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "POST /api/blackjack/hit HTTP/1.1" 200 OK
+INFO:     172.20.0.1:53352 - "POST /api/blackjack/start HTTP/1.1" 200 OK

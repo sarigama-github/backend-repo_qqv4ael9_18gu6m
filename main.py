@@ -2,11 +2,10 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Literal, Dict, Any
-from bson import ObjectId
+from typing import Literal, Dict, Any, List, Optional
 
-from database import db, create_document, get_documents
-from schemas import Player, GameResult
+from database import db, create_document
+from schemas import Player, GameResult, BlackjackHand
 
 app = FastAPI(title="Fun Casino API", description="Play-for-fun casino games. No real money.")
 
@@ -90,6 +89,13 @@ def get_player(username: str):
 
 # Helpers
 
+def get_balance(username: str) -> int:
+    col = collection("player")
+    doc = col.find_one({"username": username})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return int(doc.get("balance", 0))
+
 def adjust_balance(username: str, delta: int) -> int:
     col = collection("player")
     doc = col.find_one({"username": username})
@@ -99,80 +105,245 @@ def adjust_balance(username: str, delta: int) -> int:
     col.update_one({"_id": doc["_id"]}, {"$set": {"balance": new_balance}})
     return new_balance
 
-# Game logic (simple, provably-fair-like seeds could be added later)
+# Game logic
 import random
 
-# Blackjack
+# ----- Blackjack with player actions -----
 
-def blackjack_hand_value(cards):
-    value = 0
+RANKS = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
+SUITS = ["♠","♥","♦","♣"]
+
+CARD_VALUES = {"A": 11, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 10, "J": 10, "Q": 10, "K": 10}
+
+
+def hand_value(cards: List[str]) -> int:
+    total = 0
     aces = 0
     for c in cards:
         r = c[:-1]
-        if r in ["J","Q","K"]:
-            value += 10
-        elif r == "A":
+        total += CARD_VALUES[r]
+        if r == "A":
             aces += 1
-            value += 11
-        else:
-            value += int(r)
-    while value > 21 and aces:
-        value -= 10
+    while total > 21 and aces:
+        total -= 10
         aces -= 1
-    return value
+    return total
 
 
-def draw_card():
-    ranks = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
-    suits = ["♠","♥","♦","♣"]
-    return f"{random.choice(ranks)}{random.choice(suits)}"
+def make_shoe(decks: int = 6) -> List[str]:
+    shoe = [f"{r}{s}" for r in RANKS for s in SUITS] * decks
+    random.shuffle(shoe)
+    # burn 1 card
+    if shoe:
+        shoe.pop()
+    return shoe
 
-@app.post("/api/blackjack/play")
-def play_blackjack(req: BetRequest):
-    # deal
-    player = [draw_card(), draw_card()]
-    dealer = [draw_card(), draw_card()]
-    player_val = blackjack_hand_value(player)
-    dealer_val = blackjack_hand_value(dealer)
 
-    outcome = "push"
-    payout = 0
-    if player_val == 21 and dealer_val != 21:
-        outcome = "blackjack"
-        payout = int(req.bet * 1.5)
-    elif player_val > 21:
-        outcome = "bust"
-        payout = -req.bet
-    else:
-        # simple dealer play to 17+
-        while dealer_val < 17:
-            dealer.append(draw_card())
-            dealer_val = blackjack_hand_value(dealer)
-        if dealer_val > 21 or player_val > dealer_val:
-            outcome = "win"
-            payout = req.bet
-        elif player_val < dealer_val:
+def draw(shoe: List[str]) -> str:
+    if not shoe:
+        # reshuffle new shoe if exhausted
+        shoe.extend(make_shoe())
+    return shoe.pop()
+
+
+class BlackjackStart(BaseModel):
+    username: str
+    bet: int = Field(..., ge=1, le=1000)
+
+
+@app.post("/api/blackjack/start")
+def blackjack_start(req: BlackjackStart):
+    # ensure no other active hand
+    hand_col = collection("blackjackhand")
+    existing = hand_col.find_one({"username": req.username, "status": "player_turn"})
+    if existing:
+        raise HTTPException(status_code=400, detail="Finish your current hand first")
+    # balance check
+    if get_balance(req.username) < req.bet:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    shoe = make_shoe()
+    player_cards = [draw(shoe), draw(shoe)]
+    dealer_cards = [draw(shoe), draw(shoe)]
+
+    p_val = hand_value(player_cards)
+    d_val = hand_value(dealer_cards)
+
+    # Natural checks
+    if p_val == 21 or d_val == 21:
+        # resolve immediately
+        outcome = "push"
+        payout = 0
+        if p_val == 21 and d_val != 21:
+            outcome = "blackjack"
+            payout = int(req.bet * 1.5)
+        elif d_val == 21 and p_val != 21:
             outcome = "lose"
             payout = -req.bet
         else:
             outcome = "push"
             payout = 0
+        new_balance = adjust_balance(req.username, payout)
+        create_document("gameresult", GameResult(
+            username=req.username,
+            game="blackjack",
+            bet=req.bet,
+            payout=payout,
+            balance_after=new_balance,
+            details={"player": player_cards, "dealer": dealer_cards, "outcome": outcome, "natural": True}
+        ))
+        return {
+            "status": "resolved",
+            "player": player_cards,
+            "dealer": dealer_cards,
+            "outcome": outcome,
+            "payout": payout,
+            "balance": new_balance
+        }
 
-    new_balance = adjust_balance(req.username, payout)
-    create_document("gameresult", GameResult(
+    # otherwise create active hand
+    hand = BlackjackHand(
         username=req.username,
-        game="blackjack",
         bet=req.bet,
+        player_cards=player_cards,
+        dealer_cards=dealer_cards,
+        shoe=shoe,
+        status="player_turn",
+        can_double=True
+    )
+    hand_id = create_document("blackjackhand", hand)
+    return {
+        "status": "player_turn",
+        "player": player_cards,
+        "dealer": dealer_cards,
+        "bet": req.bet,
+        "can_double": True,
+        "hand_id": hand_id
+    }
+
+
+class BlackjackAction(BaseModel):
+    username: str
+
+
+def get_active_hand(username: str):
+    col = collection("blackjackhand")
+    hand = col.find_one({"username": username, "status": "player_turn"})
+    if not hand:
+        raise HTTPException(status_code=404, detail="No active hand")
+    return hand
+
+
+def resolve_and_record(username: str, bet: int, player_cards: List[str], dealer_cards: List[str]) -> Dict[str, Any]:
+    p_val = hand_value(player_cards)
+    d_val = hand_value(dealer_cards)
+    # Dealer plays to 17, stands on soft 17
+    while d_val < 17:
+        dealer_cards.append(draw([]))  # draw from a fresh card if needed (should not happen). We'll handle properly below.
+        d_val = hand_value(dealer_cards)
+    # Compare
+    if p_val > 21:
+        outcome = "bust"
+        payout = -bet
+    elif d_val > 21 or p_val > d_val:
+        outcome = "win"
+        payout = bet
+    elif p_val < d_val:
+        outcome = "lose"
+        payout = -bet
+    else:
+        outcome = "push"
+        payout = 0
+    new_balance = adjust_balance(username, payout)
+    create_document("gameresult", GameResult(
+        username=username,
+        game="blackjack",
+        bet=bet,
         payout=payout,
         balance_after=new_balance,
-        details={"player": player, "dealer": dealer, "outcome": outcome}
+        details={"player": player_cards, "dealer": dealer_cards, "outcome": outcome}
     ))
-    return {"outcome": outcome, "payout": payout, "player": player, "dealer": dealer, "balance": new_balance}
+    # mark hand resolved
+    collection("blackjackhand").update_many({"username": username}, {"$set": {"status": "resolved"}})
+    return {"outcome": outcome, "payout": payout, "balance": new_balance}
 
-# Slots
+
+@app.post("/api/blackjack/hit")
+def blackjack_hit(req: BlackjackAction):
+    col = collection("blackjackhand")
+    hand = get_active_hand(req.username)
+    shoe = hand.get("shoe", [])
+    # draw card
+    if not shoe:
+        shoe = make_shoe()
+    card = shoe.pop()
+    player_cards = hand["player_cards"] + [card]
+    dealer_cards = hand["dealer_cards"]
+    p_val = hand_value(player_cards)
+
+    if p_val > 21:
+        # bust resolves immediately
+        col.update_one({"_id": hand["_id"]}, {"$set": {"player_cards": player_cards, "shoe": shoe, "status": "resolved"}})
+        result = resolve_and_record(req.username, int(hand["bet"]), player_cards, dealer_cards)
+        return {"status": "resolved", "player": player_cards, "dealer": dealer_cards, **result}
+    else:
+        col.update_one({"_id": hand["_id"]}, {"$set": {"player_cards": player_cards, "shoe": shoe, "can_double": False}})
+        return {"status": "player_turn", "player": player_cards, "dealer": dealer_cards, "bet": hand["bet"], "can_double": False}
+
+
+@app.post("/api/blackjack/stand")
+def blackjack_stand(req: BlackjackAction):
+    col = collection("blackjackhand")
+    hand = get_active_hand(req.username)
+    shoe = hand.get("shoe", [])
+    dealer_cards = hand["dealer_cards"]
+    if not shoe:
+        shoe = make_shoe()
+    # dealer plays to 17 stand on all 17
+    while hand_value(dealer_cards) < 17:
+        dealer_cards.append(shoe.pop())
+        if not shoe:
+            shoe = make_shoe()
+    col.update_one({"_id": hand["_id"]}, {"$set": {"dealer_cards": dealer_cards, "shoe": shoe, "status": "resolved"}})
+    result = resolve_and_record(req.username, int(hand["bet"]), hand["player_cards"], dealer_cards)
+    return {"status": "resolved", "player": hand["player_cards"], "dealer": dealer_cards, **result}
+
+
+@app.post("/api/blackjack/double")
+def blackjack_double(req: BlackjackAction):
+    col = collection("blackjackhand")
+    hand = get_active_hand(req.username)
+    if not hand.get("can_double", False) or len(hand.get("player_cards", [])) != 2:
+        raise HTTPException(status_code=400, detail="Double not allowed now")
+    # check balance can cover doubling
+    current_bet = int(hand["bet"])
+    if get_balance(req.username) < current_bet:
+        raise HTTPException(status_code=400, detail="Insufficient balance to double")
+
+    shoe = hand.get("shoe", [])
+    if not shoe:
+        shoe = make_shoe()
+    # double bet, draw one, then stand and resolve
+    current_bet *= 2
+    player_cards = hand["player_cards"] + [shoe.pop()]
+    dealer_cards = hand["dealer_cards"]
+
+    # Dealer plays
+    while hand_value(dealer_cards) < 17:
+        if not shoe:
+            shoe = make_shoe()
+        dealer_cards.append(shoe.pop())
+
+    # save resolution
+    col.update_one({"_id": hand["_id"]}, {"$set": {"player_cards": player_cards, "dealer_cards": dealer_cards, "shoe": shoe, "status": "resolved"}})
+    result = resolve_and_record(req.username, current_bet, player_cards, dealer_cards)
+    return {"status": "resolved", "player": player_cards, "dealer": dealer_cards, **result}
+
+
+# ----- Slots (simple for now) -----
 
 symbols = ["🍒","🍋","🔔","⭐","7️⃣","🍀"]
-weights = [30, 25, 20, 15, 7, 3]  # simple rarity
+weights = [30, 25, 20, 15, 7, 3]
 
 @app.post("/api/slots/spin")
 def spin_slots(req: BetRequest):
@@ -200,15 +371,17 @@ def spin_slots(req: BetRequest):
     ))
     return {"reels": reels, "outcome": outcome, "payout": payout, "balance": new_balance}
 
-# Baccarat (simplified punto banco)
+# ----- Baccarat (same as before simplified rules) -----
 
 card_values = {
     "A": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "10": 0, "J": 0, "Q": 0, "K": 0
 }
 
+
 def draw_rank():
     ranks = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
     return random.choice(ranks)
+
 
 class BaccaratBet(BaseModel):
     username: str
@@ -218,6 +391,7 @@ class BaccaratBet(BaseModel):
 
 def hand_total(cards):
     return sum(card_values[r] for r in cards) % 10
+
 
 @app.post("/api/baccarat/play")
 def play_baccarat(req: BaccaratBet):
