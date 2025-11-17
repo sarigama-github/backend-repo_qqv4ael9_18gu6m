@@ -12,9 +12,9 @@ Model name is converted to lowercase for the collection name:
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Literal, Dict, Any
 
-# Example schemas (replace with your own):
+# Example schemas (kept for reference)
 
 class User(BaseModel):
     """
@@ -38,11 +38,24 @@ class Product(BaseModel):
     category: str = Field(..., description="Product category")
     in_stock: bool = Field(True, description="Whether product is in stock")
 
-# Add your own schemas here:
-# --------------------------------------------------
+# Casino app schemas
 
-# Note: The Flames database viewer will automatically:
-# 1. Read these schemas from GET /schema endpoint
-# 2. Use them for document validation when creating/editing
-# 3. Handle all database operations (CRUD) directly
-# 4. You don't need to create any database endpoints!
+class Player(BaseModel):
+    """
+    Players collection schema
+    Collection name: "player"
+    """
+    username: str = Field(..., min_length=3, max_length=24, description="Unique username")
+    balance: int = Field(1000, ge=0, description="Play credits (no real money)")
+
+class GameResult(BaseModel):
+    """
+    Game results history schema
+    Collection name: "gameresult"
+    """
+    username: str
+    game: Literal["blackjack", "slots", "baccarat"]
+    bet: int = Field(..., ge=1)
+    payout: int = Field(..., description="Credits won (can be negative for loss)")
+    balance_after: int = Field(..., ge=0)
+    details: Dict[str, Any] = Field(default_factory=dict)
